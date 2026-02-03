@@ -95,6 +95,81 @@ class SiteHealthResponse(BaseModel):
     count: int = Field(description="Number of sites returned")
 
 
+class ComplianceDetail(BaseModel):
+    """Compliance detail for a network device."""
+    deviceUuid: str = Field(description="Device UUID")
+    displayName: str | None = Field(default=None, description="Device display name")
+    complianceType: str = Field(description="Type of compliance check (EOX, IMAGE, PSIRT, etc.)")
+    status: str = Field(description="Compliance status (COMPLIANT, NON_COMPLIANT, etc.)")
+    category: str | None = Field(default=None, description="Compliance category")
+    lastSyncTime: int | None = Field(default=None, description="Last sync timestamp (epoch ms)")
+    lastUpdateTime: int | None = Field(default=None, description="Last update timestamp (epoch ms)")
+    state: str | None = Field(default=None, description="Current state")
+    remediationSupported: bool | None = Field(default=None, description="Whether remediation is supported")
+
+
+class ComplianceDetailResponse(BaseModel):
+    """Response containing compliance details."""
+    devices: list[ComplianceDetail] = Field(description="List of device compliance details")
+    count: int = Field(description="Number of devices returned")
+
+
+class ComplianceCountResponse(BaseModel):
+    """Response containing compliance count."""
+    count: int = Field(description="Number of devices matching criteria")
+    compliance_type: str | None = Field(default=None, description="Compliance type filter applied")
+    compliance_status: str | None = Field(default=None, description="Compliance status filter applied")
+
+
+class EoXSummaryResponse(BaseModel):
+    """Network-wide EoX summary."""
+    hardware_count: int = Field(description="Number of devices with hardware EoX alerts")
+    software_count: int = Field(description="Number of devices with software EoX alerts")
+    module_count: int = Field(description="Number of devices with module EoX alerts")
+    total_count: int = Field(description="Total number of devices with any EoX alerts")
+
+
+class EoXDeviceSummary(BaseModel):
+    """EoX summary for a device."""
+    device_id: str = Field(description="Device UUID")
+    alert_count: int = Field(description="Total number of EoX alerts for this device")
+    hardware_count: int | None = Field(default=None, description="Number of hardware EoX alerts")
+    software_count: int | None = Field(default=None, description="Number of software EoX alerts")
+    module_count: int | None = Field(default=None, description="Number of module EoX alerts")
+    scan_status: str | None = Field(default=None, description="Scan status")
+    last_scan_time: int | None = Field(default=None, description="Last scan timestamp (epoch ms)")
+    comments: str | None = Field(default=None, description="Additional comments")
+
+
+class EoXDevicesResponse(BaseModel):
+    """Response containing EoX device summaries."""
+    devices: list[EoXDeviceSummary] = Field(description="List of devices with EoX information")
+    count: int = Field(description="Number of devices returned")
+
+
+class EoXBulletin(BaseModel):
+    """EoX bulletin details."""
+    bulletinNumber: str | None = Field(default=None, description="Bulletin number")
+    bulletinName: str | None = Field(default=None, description="Bulletin name/title")
+    eoxType: str | None = Field(default=None, description="EoX type (HARDWARE, SOFTWARE, MODULE)")
+    bulletinURL: str | None = Field(default=None, description="URL to bulletin details")
+    endOfLifeDate: int | None = Field(default=None, description="End of life date (epoch ms)")
+    endOfSaleDate: int | None = Field(default=None, description="End of sale date (epoch ms)")
+    endOfSupportDate: int | None = Field(default=None, description="End of support date (epoch ms)")
+    endOfSWMaintenanceDate: int | None = Field(default=None, description="End of software maintenance date (epoch ms)")
+    endOfSecurityVulnerabilityDate: int | None = Field(default=None, description="End of security/vulnerability support date (epoch ms)")
+    lastDateOfSupport: int | None = Field(default=None, description="Last date of support (epoch ms)")
+
+
+class EoXDeviceDetailsResponse(BaseModel):
+    """Response containing detailed EoX information for a device."""
+    device_id: str = Field(description="Device UUID")
+    alert_count: int = Field(description="Total number of EoX alerts")
+    eox_details: list[EoXBulletin] = Field(description="List of EoX bulletins")
+    scan_status: str | None = Field(default=None, description="Scan status")
+    last_scan_time: int | None = Field(default=None, description="Last scan timestamp (epoch ms)")
+
+
 # Application context for lifespan management
 @dataclass
 class AppContext:
@@ -565,6 +640,381 @@ async def get_client_detail(
         raise RuntimeError(error_msg) from e
     except Exception as e:
         error_msg = f"Unexpected error fetching client detail: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+
+
+@mcp.tool()
+async def get_compliance_detail(
+    compliance_type: str | None = None,
+    compliance_status: str | None = None,
+    device_uuid: str | None = None,
+    limit: int = 100,
+    offset: int = 1,
+    ctx: Context[ServerSession, AppContext] | None = None
+) -> ComplianceDetailResponse:
+    """Get detailed compliance status for network devices.
+
+    Retrieves compliance information with flexible filtering by type, status,
+    and specific devices. Supports multiple compliance types including EOX,
+    IMAGE, PSIRT, RUNNING_CONFIG, and more.
+
+    Args:
+        compliance_type: Filter by compliance type(s), comma-separated.
+                        Valid types: APPLICATION_VISIBILITY, EOX, FABRIC, IMAGE,
+                        NETWORK_PROFILE, NETWORK_SETTINGS, PSIRT, RUNNING_CONFIG, WORKFLOW.
+        compliance_status: Filter by compliance status(es), comma-separated.
+                          Valid statuses: COMPLIANT, NON_COMPLIANT, IN_PROGRESS,
+                          NOT_AVAILABLE, NOT_APPLICABLE, ERROR.
+        device_uuid: Filter by device UUID(s), comma-separated.
+        limit: Maximum number of devices to return (default: 100, max: 500).
+        offset: Offset for pagination, 1-based indexing (default: 1).
+        ctx: MCP context for logging and progress reporting (auto-injected).
+
+    Returns:
+        ComplianceDetailResponse containing compliance details for matching devices.
+
+    Raises:
+        RuntimeError: If the API request fails or data cannot be retrieved.
+    """
+    try:
+        if ctx:
+            await ctx.info("Fetching compliance details")
+            await ctx.report_progress(0.0, 1.0, "Starting compliance query")
+            client = ctx.request_context.lifespan_context.client
+        else:
+            client = CatalystCenterClient()
+
+        params: dict[str, Any] = {
+            "limit": min(limit, 500),
+            "offset": offset
+        }
+
+        if compliance_type:
+            params["complianceType"] = compliance_type
+        if compliance_status:
+            params["complianceStatus"] = compliance_status
+        if device_uuid:
+            params["deviceUuid"] = device_uuid
+
+        if ctx:
+            await ctx.report_progress(0.3, 1.0, "Querying Catalyst Center API")
+
+        response = await client.get("/dna/intent/api/v1/compliance/detail", params=params)
+
+        if ctx:
+            await ctx.report_progress(0.7, 1.0, "Processing compliance data")
+
+        compliance_data = response.get("response", [])
+
+        # Convert to Pydantic models
+        devices = [
+            ComplianceDetail(
+                deviceUuid=item.get("deviceUuid", ""),
+                displayName=item.get("displayName"),
+                complianceType=item.get("complianceType", ""),
+                status=item.get("status", ""),
+                category=item.get("category"),
+                lastSyncTime=item.get("lastSyncTime"),
+                lastUpdateTime=item.get("lastUpdateTime"),
+                state=item.get("state"),
+                remediationSupported=item.get("remediationSupported")
+            )
+            for item in compliance_data
+        ]
+
+        if ctx:
+            await ctx.report_progress(1.0, 1.0, f"Retrieved {len(devices)} compliance records")
+            await ctx.info(f"Found {len(devices)} devices with compliance data")
+
+        return ComplianceDetailResponse(
+            devices=devices,
+            count=len(devices)
+        )
+    except httpx.HTTPError as e:
+        error_msg = f"Failed to fetch compliance details: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error fetching compliance details: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+
+
+@mcp.tool()
+async def get_compliance_count(
+    compliance_type: str | None = None,
+    compliance_status: str | None = None,
+    ctx: Context[ServerSession, AppContext] | None = None
+) -> ComplianceCountResponse:
+    """Get aggregate count of devices matching compliance criteria.
+
+    Returns the total number of devices that match the specified compliance
+    type and/or status filters. Useful for quick compliance posture assessment.
+
+    Args:
+        compliance_type: Filter by compliance type(s), comma-separated.
+                        Valid types: APPLICATION_VISIBILITY, EOX, FABRIC, IMAGE,
+                        NETWORK_PROFILE, NETWORK_SETTINGS, PSIRT, RUNNING_CONFIG, WORKFLOW.
+        compliance_status: Filter by compliance status(es), comma-separated.
+                          Valid statuses: COMPLIANT, NON_COMPLIANT, IN_PROGRESS,
+                          NOT_AVAILABLE, NOT_APPLICABLE, ERROR.
+        ctx: MCP context for logging and progress reporting (auto-injected).
+
+    Returns:
+        ComplianceCountResponse containing count and applied filters.
+
+    Raises:
+        RuntimeError: If the API request fails or data cannot be retrieved.
+    """
+    try:
+        if ctx:
+            await ctx.info("Fetching compliance count")
+            client = ctx.request_context.lifespan_context.client
+        else:
+            client = CatalystCenterClient()
+
+        params: dict[str, Any] = {}
+
+        if compliance_type:
+            params["complianceType"] = compliance_type
+        if compliance_status:
+            params["complianceStatus"] = compliance_status
+
+        response = await client.get("/dna/intent/api/v1/compliance/detail/count", params=params)
+
+        count = response.get("response", 0)
+
+        if ctx:
+            await ctx.info(f"Found {count} devices matching compliance criteria")
+
+        return ComplianceCountResponse(
+            count=count,
+            compliance_type=compliance_type,
+            compliance_status=compliance_status
+        )
+    except httpx.HTTPError as e:
+        error_msg = f"Failed to fetch compliance count: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error fetching compliance count: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+
+
+@mcp.tool()
+async def get_eox_summary(
+    ctx: Context[ServerSession, AppContext] | None = None
+) -> EoXSummaryResponse:
+    """Get network-wide End-of-Life/End-of-Support summary.
+
+    Retrieves aggregate counts of devices with EoX alerts by category
+    (hardware, software, modules). Provides a high-level view of the
+    network's lifecycle management status.
+
+    Args:
+        ctx: MCP context for logging and progress reporting (auto-injected).
+
+    Returns:
+        EoXSummaryResponse containing counts by EoX category.
+
+    Raises:
+        RuntimeError: If the API request fails or data cannot be retrieved.
+    """
+    try:
+        if ctx:
+            await ctx.info("Fetching EoX summary")
+            client = ctx.request_context.lifespan_context.client
+        else:
+            client = CatalystCenterClient()
+
+        response = await client.get("/dna/intent/api/v1/eox-status/summary")
+
+        summary = response.get("response", {})
+
+        hardware_count = summary.get("hardwareCount", 0)
+        software_count = summary.get("softwareCount", 0)
+        module_count = summary.get("moduleCount", 0)
+        total_count = summary.get("totalCount", 0)
+
+        if ctx:
+            await ctx.info(f"EoX Summary - Total: {total_count} (HW: {hardware_count}, SW: {software_count}, Modules: {module_count})")
+
+        return EoXSummaryResponse(
+            hardware_count=hardware_count,
+            software_count=software_count,
+            module_count=module_count,
+            total_count=total_count
+        )
+    except httpx.HTTPError as e:
+        error_msg = f"Failed to fetch EoX summary: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error fetching EoX summary: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+
+
+@mcp.tool()
+async def get_eox_devices(
+    limit: int = 100,
+    offset: int = 1,
+    ctx: Context[ServerSession, AppContext] | None = None
+) -> EoXDevicesResponse:
+    """Get EoX status for all devices in the network.
+
+    Retrieves End-of-Life/End-of-Support status for all network devices,
+    showing which devices have EoX alerts and summary counts by category.
+    Supports pagination for large networks.
+
+    Args:
+        limit: Maximum number of devices to return (default: 100, max: 500).
+        offset: Offset for pagination, 1-based indexing (default: 1).
+        ctx: MCP context for logging and progress reporting (auto-injected).
+
+    Returns:
+        EoXDevicesResponse containing EoX information for devices.
+
+    Raises:
+        RuntimeError: If the API request fails or data cannot be retrieved.
+    """
+    try:
+        if ctx:
+            await ctx.info("Fetching EoX device status")
+            await ctx.report_progress(0.0, 1.0, "Starting EoX device query")
+            client = ctx.request_context.lifespan_context.client
+        else:
+            client = CatalystCenterClient()
+
+        params: dict[str, Any] = {
+            "limit": min(limit, 500),
+            "offset": offset
+        }
+
+        if ctx:
+            await ctx.report_progress(0.3, 1.0, "Querying Catalyst Center API")
+
+        response = await client.get("/dna/intent/api/v1/eox-status/device", params=params)
+
+        if ctx:
+            await ctx.report_progress(0.7, 1.0, "Processing EoX device data")
+
+        devices_data = response.get("response", [])
+
+        # Convert to Pydantic models
+        devices = []
+        for item in devices_data:
+            summary = item.get("summary", {})
+            devices.append(
+                EoXDeviceSummary(
+                    device_id=item.get("deviceId", ""),
+                    alert_count=item.get("alertCount", 0),
+                    hardware_count=summary.get("hardwareCount") if summary else None,
+                    software_count=summary.get("softwareCount") if summary else None,
+                    module_count=summary.get("moduleCount") if summary else None,
+                    scan_status=item.get("scanStatus"),
+                    last_scan_time=item.get("lastScanTime"),
+                    comments=item.get("comments")
+                )
+            )
+
+        if ctx:
+            await ctx.report_progress(1.0, 1.0, f"Retrieved {len(devices)} devices with EoX data")
+            await ctx.info(f"Found {len(devices)} devices with EoX information")
+
+        return EoXDevicesResponse(
+            devices=devices,
+            count=len(devices)
+        )
+    except httpx.HTTPError as e:
+        error_msg = f"Failed to fetch EoX devices: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error fetching EoX devices: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+
+
+@mcp.tool()
+async def get_eox_device_details(
+    device_id: str,
+    ctx: Context[ServerSession, AppContext] | None = None
+) -> EoXDeviceDetailsResponse:
+    """Get detailed End-of-Life/End-of-Support information for a specific device.
+
+    Retrieves comprehensive EoX bulletin details for a device, including
+    end-of-sale dates, end-of-support dates, and URLs to Cisco EoX bulletins.
+    Essential for lifecycle planning and remediation.
+
+    Args:
+        device_id: Device UUID (required).
+        ctx: MCP context for logging and progress reporting (auto-injected).
+
+    Returns:
+        EoXDeviceDetailsResponse containing detailed EoX bulletins.
+
+    Raises:
+        RuntimeError: If the API request fails or data cannot be retrieved.
+    """
+    try:
+        if ctx:
+            await ctx.info(f"Fetching EoX details for device {device_id}")
+            client = ctx.request_context.lifespan_context.client
+        else:
+            client = CatalystCenterClient()
+
+        response = await client.get(f"/dna/intent/api/v1/eox-status/device/{device_id}")
+
+        device_data = response.get("response", {})
+
+        eox_details_data = device_data.get("eoxDetails", [])
+
+        # Convert to Pydantic models
+        eox_details = [
+            EoXBulletin(
+                bulletinNumber=item.get("bulletinNumber"),
+                bulletinName=item.get("bulletinName"),
+                eoxType=item.get("eoxType"),
+                bulletinURL=item.get("bulletinURL"),
+                endOfLifeDate=item.get("endOfLifeDate"),
+                endOfSaleDate=item.get("endOfSaleDate"),
+                endOfSupportDate=item.get("endOfSupportDate"),
+                endOfSWMaintenanceDate=item.get("endOfSWMaintenanceDate"),
+                endOfSecurityVulnerabilityDate=item.get("endOfSecurityVulnerabilityDate"),
+                lastDateOfSupport=item.get("lastDateOfSupport")
+            )
+            for item in eox_details_data
+        ]
+
+        if ctx:
+            await ctx.info(f"Retrieved {len(eox_details)} EoX bulletins for device {device_id}")
+
+        return EoXDeviceDetailsResponse(
+            device_id=device_data.get("deviceId", device_id),
+            alert_count=device_data.get("alertCount", 0),
+            eox_details=eox_details,
+            scan_status=device_data.get("scanStatus"),
+            last_scan_time=device_data.get("lastScanTime")
+        )
+    except httpx.HTTPError as e:
+        error_msg = f"Failed to fetch EoX details for device {device_id}: {str(e)}"
+        if ctx:
+            await ctx.error(error_msg)
+        raise RuntimeError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error fetching EoX details: {str(e)}"
         if ctx:
             await ctx.error(error_msg)
         raise RuntimeError(error_msg) from e

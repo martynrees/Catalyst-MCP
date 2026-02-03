@@ -6,12 +6,22 @@ A Model Context Protocol (MCP) server for Cisco Catalyst Center, providing netwo
 
 This MCP server provides focused, high-value tools for Cisco Catalyst Center:
 
+### Network Monitoring
 - **`get_client_counts`** - Get counts of wired and wireless clients connected to the network
 - **`get_network_devices`** - Query network device inventory with flexible filtering
 - **`get_network_health`** - Get overall network health by device category
-- **`get_issues`** - Retrieve network issues with filtering by priority, status, and more
 - **`get_site_health`** - Get health information for sites (areas and buildings)
 - **`get_client_detail`** - Get detailed information about a specific client by MAC address
+
+### Issues & Assurance
+- **`get_issues`** - Retrieve network issues with filtering by priority, status, and more
+
+### Compliance & Lifecycle Management
+- **`get_compliance_detail`** - Get detailed compliance status for devices (EOX, IMAGE, PSIRT, etc.)
+- **`get_compliance_count`** - Get aggregate count of devices by compliance criteria
+- **`get_eox_summary`** - Get network-wide End-of-Life/End-of-Support summary
+- **`get_eox_devices`** - Get EoX status for all devices in the network
+- **`get_eox_device_details`** - Get detailed EoX bulletins for a specific device
 
 ## Prerequisites
 
@@ -166,6 +176,61 @@ sites = await get_site_health(site_type="BUILDING")
 ```python
 # Get detailed info for a specific client
 client = await get_client_detail(mac_address="00:11:22:33:44:55")
+```
+
+### Get Compliance Detail
+
+```python
+# Get all non-compliant devices
+compliance = await get_compliance_detail(compliance_status="NON_COMPLIANT")
+
+# Get EOX compliance status for specific devices
+compliance = await get_compliance_detail(
+    compliance_type="EOX",
+    device_uuid="device-uuid-1,device-uuid-2"
+)
+
+# Get PSIRT (security advisory) compliance
+compliance = await get_compliance_detail(compliance_type="PSIRT", limit=100)
+```
+
+### Get Compliance Count
+
+```python
+# Count all non-compliant devices
+count = await get_compliance_count(compliance_status="NON_COMPLIANT")
+
+# Count devices with image compliance issues
+count = await get_compliance_count(
+    compliance_type="IMAGE",
+    compliance_status="NON_COMPLIANT"
+)
+```
+
+### Get EoX Summary
+
+```python
+# Get network-wide EoX summary
+summary = await get_eox_summary()
+# Returns: {"hardware_count": 15, "software_count": 8, "module_count": 3, "total_count": 26}
+```
+
+### Get EoX Devices
+
+```python
+# Get all devices with EoX alerts
+devices = await get_eox_devices()
+
+# Get with pagination for large networks
+devices = await get_eox_devices(limit=50, offset=1)
+```
+
+### Get EoX Device Details
+
+```python
+# Get detailed EoX bulletins for a specific device
+details = await get_eox_device_details(device_id="device-uuid-here")
+# Returns detailed bulletin info with end-of-sale/support dates and URLs
 ```
 
 ## Project Structure
