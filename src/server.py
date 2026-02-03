@@ -138,7 +138,7 @@ class EoXDeviceSummary(BaseModel):
     module_count: int | None = Field(default=None, description="Number of module EoX alerts")
     scan_status: str | None = Field(default=None, description="Scan status")
     last_scan_time: int | None = Field(default=None, description="Last scan timestamp (epoch ms)")
-    comments: str | None = Field(default=None, description="Additional comments")
+    comments: list[str] | None = Field(default=None, description="Additional comments")
 
 
 class EoXDevicesResponse(BaseModel):
@@ -913,14 +913,30 @@ async def get_eox_devices(
         # Convert to Pydantic models
         devices = []
         for item in devices_data:
-            summary = item.get("summary", {})
+            # Parse summary array to extract counts by type
+            summary_list = item.get("summary", [])
+            hardware_count = None
+            software_count = None
+            module_count = None
+            
+            if isinstance(summary_list, list):
+                for summary_item in summary_list:
+                    eox_type = summary_item.get("eoxType", "")
+                    count = summary_item.get("count", 0)
+                    if eox_type == "HARDWARE":
+                        hardware_count = count
+                    elif eox_type == "SOFTWARE":
+                        software_count = count
+                    elif eox_type == "MODULE":
+                        module_count = count
+            
             devices.append(
                 EoXDeviceSummary(
                     device_id=item.get("deviceId", ""),
                     alert_count=item.get("alertCount", 0),
-                    hardware_count=summary.get("hardwareCount") if summary else None,
-                    software_count=summary.get("softwareCount") if summary else None,
-                    module_count=summary.get("moduleCount") if summary else None,
+                    hardware_count=hardware_count,
+                    software_count=software_count,
+                    module_count=module_count,
                     scan_status=item.get("scanStatus"),
                     last_scan_time=item.get("lastScanTime"),
                     comments=item.get("comments")
