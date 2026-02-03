@@ -69,7 +69,15 @@ The server will start and be available for MCP clients to connect to via stdio t
 
 ### Using with Claude Desktop
 
-Add this server touv",
+Add this server to your Claude Desktop configuration file:
+
+**Option 1: Using environment variables directly**
+
+```json
+{
+  "mcpServers": {
+    "catalyst-center": {
+      "command": "uv",
       "args": ["run", "src/server.py"],
       "cwd": "/path/to/catalyst-center-mcp",
       "env": {
@@ -83,20 +91,16 @@ Add this server touv",
 }
 ```
 
-Or use a `.env` file in the project directory:
+**Option 2: Using .env file (recommended)**
+
+Create a `.env` file in the project directory with your credentials, then:
 
 ```json
 {
   "mcpServers": {
     "catalyst-center": {
       "command": "uv",
-      "args": [
-```json
-{
-  "mcpServers": {
-    "catalyst-center": {
-      "command": "python",
-      "args": ["-m", "fastmcp", "run", "src/server.py"],
+      "args": ["run", "src/server.py"],
       "cwd": "/path/to/catalyst-center-mcp"
     }
   }
